@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cs-core",
+    "crates/cs-equations",
+    "crates/cs-solver",
+    "crates/cs-backend-cpu",
+    "crates/cs-io",
+    "crates/cs-cli",
+]
+exclude = [
+    "crates/cs-backend-cuda",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+authors = ["LI, CHIN-KAI"]
+repository = "https://github.com/Funtrollor/Cube_sphere_tansport_equation"
+
+[workspace.dependencies]
+cs-core = { path = "crates/cs-core" }
+cs-equations = { path = "crates/cs-equations" }
+cs-solver = { path = "crates/cs-solver" }
+cs-backend-cpu = { path = "crates/cs-backend-cpu" }
+cs-io = { path = "crates/cs-io" }
+rayon = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.test]
+opt-level = 2

@@ -1,0 +1,16 @@
+target/
+**/*.rs.bk
+*.vtu
+*.vtk
+*.pvd
+*.csv
+out/
+Cargo.lock
+crates/cs-backend-cuda/target/
+crates/cs-backend-cuda/Cargo.lock
+**/*.ptx
+**/*.cubin
+**/*.ltoir
+**/*.ll
+**/*.bc
+
