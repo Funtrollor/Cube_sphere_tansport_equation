@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/cs-core",
-    "crates/cs-equations",
-    "crates/cs-solver",
-    "crates/cs-backend-cpu",
-    "crates/cs-io",
-    "crates/cs-cli",
+    "crates/cubesphere-core",
+    "crates/cubesphere-equations",
+    "crates/cubesphere-solver",
+    "crates/cubesphere-backend-cpu",
+    "crates/cubesphere-io",
+    "crates/cubesphere-cli",
 ]
 exclude = [
-    "crates/cs-backend-cuda",
+    "crates/cubesphere-backend-cuda",
 ]
 
 [workspace.package]
@@ -17,14 +17,18 @@ version = "0.2.0"
 edition = "2021"
 license = "MIT"
 authors = ["LI, CHIN-KAI"]
-repository = "https://github.com/Funtrollor/Cube_sphere_tansport_equation"
+repository = "https://github.com/Funtrollor/cubesphere"
+readme = "README.md"
+rust-version = "1.87"
+keywords = ["cubed-sphere", "spectral-element", "advection", "pde", "climate"]
+categories = ["science", "mathematics", "simulation"]
 
 [workspace.dependencies]
-cs-core = { path = "crates/cs-core" }
-cs-equations = { path = "crates/cs-equations" }
-cs-solver = { path = "crates/cs-solver" }
-cs-backend-cpu = { path = "crates/cs-backend-cpu" }
-cs-io = { path = "crates/cs-io" }
+cubesphere-core = { path = "crates/cubesphere-core", version = "0.2.0" }
+cubesphere-equations = { path = "crates/cubesphere-equations", version = "0.2.0" }
+cubesphere-solver = { path = "crates/cubesphere-solver", version = "0.2.0" }
+cubesphere-backend-cpu = { path = "crates/cubesphere-backend-cpu", version = "0.2.0" }
+cubesphere-io = { path = "crates/cubesphere-io", version = "0.2.0" }
 rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -1,6 +1,6 @@
 # Windows 11 + WSL2 + RTX 5070 Ti (`cuda-oxide`) GPU 工具鏈設定與驗證指南
 
-本指南說明如何在 **Windows 11 + WSL2 (Ubuntu 24.04) + NVIDIA GeForce RTX 5070 Ti (`sm_120`, Consumer Blackwell)** 環境中，安裝 [`NVIDIA/cuda-rust`](https://github.com/NVIDIA/cuda-rust)（`cuda-oxide`）工具鏈，並編譯與驗證本專案的純 Rust GPU 後端 [`crates/cs-backend-cuda`](../crates/cs-backend-cuda/src/lib.rs)。
+本指南說明如何在 **Windows 11 + WSL2 (Ubuntu 24.04) + NVIDIA GeForce RTX 5070 Ti (`sm_120`, Consumer Blackwell)** 環境中，安裝 [`NVIDIA/cuda-rust`](https://github.com/NVIDIA/cuda-rust)（`cuda-oxide`）工具鏈，並編譯與驗證本專案的純 Rust GPU 後端 [`crates/cubesphere-backend-cuda`](../crates/cubesphere-backend-cuda/src/lib.rs)。
 
 > **原生 Windows vs WSL2 說明**：
 > - 上游 `NVIDIA/cuda-rust` 目前**已正式支援原生 Windows (`x86_64-pc-windows-msvc`)**！若希望直接在 Developer PowerShell for VS 2022 編譯執行、不經過 WSL2 虛擬層，請優先參閱 [`docs/WINDOWS_CUDA_OXIDE.md`](WINDOWS_CUDA_OXIDE.md)。
@@ -28,7 +28,7 @@ WSL2 會透過 `/usr/lib/wsl/lib/libcuda.so` 直接橋接 Windows Host 的 NVIDI
 > **切勿在 WSL2 Ubuntu 內執行 `sudo apt install nvidia-driver-*`！**
 > Linux 套件版的顯示驅動會覆蓋 WSL2 專用的半虛擬化驅動橋接，導致 `cuda_bindings` 無法載入 `libcuda.so`。在 WSL2 內只安裝 **CUDA Toolkit（使用者空間編譯工具與標頭檔）** 即可。
 
-4. **I/O 效能建議**：請將專案 `git clone` 至 WSL2 原生 Linux 檔案系統（如 `~/workspace/Cube_sphere_tansport_equation`），**避免放在 `/mnt/c/...`**，否則 Cargo + `cuda-oxide` 編譯速度與 `cargo oxide` 快取 I/O 會慢數倍。
+4. **I/O 效能建議**：請將專案 `git clone` 至 WSL2 原生 Linux 檔案系統（如 `~/workspace/cubesphere`），**避免放在 `/mnt/c/...`**，否則 Cargo + `cuda-oxide` 編譯速度與 `cargo oxide` 快取 I/O 會慢數倍。
 
 ---
 
@@ -81,7 +81,7 @@ llc-21 --version | grep nvptx
 
 ### 2.3 安裝 Rust 1.99.1 工具鏈與 `cargo-oxide`
 
-本專案在 [`crates/cs-backend-cuda/rust-toolchain.toml`](../crates/cs-backend-cuda/rust-toolchain.toml) 已鎖定與 `cuda-oxide` 相容的 Rust 版本 `1.99.1`，並在 [`.cargo/config.toml`](../crates/cs-backend-cuda/.cargo/config.toml) 自動設定 `RUSTC_BOOTSTRAP = "1"`：
+本專案在 [`crates/cubesphere-backend-cuda/rust-toolchain.toml`](../crates/cubesphere-backend-cuda/rust-toolchain.toml) 已鎖定與 `cuda-oxide` 相容的 Rust 版本 `1.99.1`，並在 [`.cargo/config.toml`](../crates/cubesphere-backend-cuda/.cargo/config.toml) 自動設定 `RUSTC_BOOTSTRAP = "1"`：
 
 ```bash
 rustup toolchain install 1.99.1
@@ -98,7 +98,7 @@ cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 進入獨立隔離的 CUDA 後端目錄執行健康檢查：
 
 ```bash
-cd ~/workspace/Cube_sphere_tansport_equation/crates/cs-backend-cuda
+cd ~/workspace/cubesphere/crates/cubesphere-backend-cuda
 cargo oxide doctor
 ```
 
@@ -119,19 +119,19 @@ cargo oxide doctor
 先跑純 CPU Workspace 測試確認數學與幾何核心在本地全數通過：
 
 ```bash
-cd ~/workspace/Cube_sphere_tansport_equation
+cd ~/workspace/cubesphere
 cargo test --release --workspace
 ```
 
-接著編譯並執行 GPU 後端驗證程式 [`gpu_parity.rs`](../crates/cs-backend-cuda/src/bin/gpu_parity.rs)：
+接著編譯並執行 GPU 後端驗證程式 [`gpu_parity.rs`](../crates/cubesphere-backend-cuda/src/bin/gpu_parity.rs)：
 
 ```bash
-cd crates/cs-backend-cuda
+cd crates/cubesphere-backend-cuda
 cargo oxide build
 cargo oxide run --bin gpu_parity
 ```
 
-`gpu_parity` 會透過完全相同的 [`ComputeBackend<T>`](../crates/cs-solver/src/backend.rs) 與 `run_lsrk45_simulation` 介面，自動執行以下四項驗收：
+`gpu_parity` 會透過完全相同的 [`ComputeBackend<T>`](../crates/cubesphere-solver/src/backend.rs) 與 `run_lsrk45_simulation` 介面，自動執行以下四項驗收：
 
 1. **Solid-Body Rotation (`f64`, `K=4, p=4`, 1 圈)**：驗證 GPU 與 CPU Rayon 逐點最大誤差 $\max |\phi_{\text{GPU}} - \phi_{\text{CPU}}| < 10^{-13}$，且全域質量誤差 $< 10^{-14}$。
 2. **Nair & Lauritzen (2010) Case 4 變形流 (`f64`, `K=4, p=5`, 1 週期)**：驗證動態時變風場的 **無超越函數三角加倍角 GPU 核心**（於主機只計算 $c_{2\omega t}, s_{2\omega t}, k_t$ 三個純量，裝置端零 `sin`/`cos` 呼叫，完全避免 `libdevice` 版本或精度漂移）與 CPU 誤差 $< 10^{-12}$，且質量守恆 $< 10^{-14}$。
@@ -145,7 +145,7 @@ cargo oxide run --bin gpu_parity
 ### 5.1 檢查產生的 PTX 與暫存器 / Shared Memory 用量
 
 ```bash
-cd crates/cs-backend-cuda
+cd crates/cubesphere-backend-cuda
 cargo oxide inspect --release --bin gpu_parity
 ```
 

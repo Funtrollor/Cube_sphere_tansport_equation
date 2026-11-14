@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+title: "cubesphere: a high-order cubed-sphere spectral element transport solver in Rust"
+type: software
+authors:
+  - family-names: "Li"
+    given-names: "Chin-Kai"
+version: 0.2.0
+license: MIT
+repository-code: "https://github.com/Funtrollor/cubesphere"
+keywords:
+  - cubed sphere
+  - spectral element method
+  - summation-by-parts
+  - advection
+  - Rust
+  - GPU
+abstract: >-
+  cubesphere solves the transport (advection) equation on the sphere with
+  Legendre–Gauss–Lobatto spectral elements on an equiangular or equidistant
+  cubed-sphere grid. It uses a split-form divergence with conservative SBP-SAT
+  interface coupling (upwind, central or blended flux) and low-storage
+  Carpenter–Kennedy RK45 time stepping, and runs on a Rayon CPU backend or an
+  experimental cuda-oxide GPU backend.

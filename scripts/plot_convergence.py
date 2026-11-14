@@ -1,4 +1,4 @@
-"""Plot h-, p-, or t-refinement convergence curves from cs-cli CSV outputs.
+"""Plot h-, p-, or t-refinement convergence curves from cubesphere CSV outputs.
 
 Usage examples:
     python scripts/plot_convergence.py out/samples/h_conv_p3.csv -o out/samples/h_conv_p3.png
@@ -115,7 +115,7 @@ def plot_convergence(datasets: list[dict], labels: list[str], title: str | None)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot cubed-sphere convergence curves from CSV.")
-    parser.add_argument("csv", nargs="+", help="One or more CSV files produced by cs-cli converge.")
+    parser.add_argument("csv", nargs="+", help="One or more CSV files produced by cubesphere converge.")
     parser.add_argument("-o", "--output", required=True, help="Output PNG file path.")
     parser.add_argument("--labels", nargs="+", default=None, help="Optional labels (one per CSV).")
     parser.add_argument("--title", default=None, help="Optional plot title.")

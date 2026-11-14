@@ -5,9 +5,7 @@ target/
 *.pvd
 *.csv
 out/
-Cargo.lock
-crates/cs-backend-cuda/target/
-crates/cs-backend-cuda/Cargo.lock
+crates/cubesphere-backend-cuda/target/
 **/*.ptx
 **/*.cubin
 **/*.ltoir
