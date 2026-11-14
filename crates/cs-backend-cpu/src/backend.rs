@@ -5,7 +5,7 @@ use rayon::prelude::*;
 
 use cs_core::{dot3, CubedSphereMesh, EdgeSide, FloatScalar};
 use cs_equations::{ScalarAdvection, WindField};
-use cs_solver::ComputeBackend;
+use cs_solver::{ComputeBackend, NumericalFlux};
 
 /// Thread-local scratch memory per Rayon worker thread to avoid heap allocations in RHS calls.
 struct ElementScratch<T: FloatScalar> {
@@ -39,17 +39,22 @@ impl<T: FloatScalar> ElementScratch<T> {
 /// High-performance pure-Rust CPU backend using Rayon across spectral elements.
 ///
 /// Key optimizations:
-/// - Single parallel pass per RHS evaluation (Volume Split-Form + Upwind SAT penalty)
+/// - Single parallel pass per RHS evaluation (Volume Split-Form + SAT penalty)
 ///   with zero shared writes (`rhs` partitioned disjointly per element).
 /// - Precomputed steady-state contravariant wind when `!wind.is_time_dependent()`,
 ///   and allocation-free thread-local evaluation when time-dependent.
 /// - Unit-stride loops over `xi_i` aligned for AVX2 / NEON auto-vectorization.
+///
+/// The interface coupling defaults to the upwind flux; use [`CpuBackend::with_flux`]
+/// to select central or blended alpha-fluxes.
 pub struct CpuBackend<T: FloatScalar> {
     mesh: Arc<CubedSphereMesh<T>>,
     wind: Arc<dyn WindField>,
     time_dependent: bool,
     steady_u_contra: Vec<T>,
     steady_v_contra: Vec<T>,
+    flux: NumericalFlux,
+    upwind_weight: T,
 }
 
 impl<T: FloatScalar> CpuBackend<T> {
@@ -75,17 +80,31 @@ impl<T: FloatScalar> CpuBackend<T> {
             (Vec::new(), Vec::new())
         };
 
+        let flux = NumericalFlux::default();
         Self {
             mesh,
             wind,
             time_dependent,
             steady_u_contra,
             steady_v_contra,
+            flux,
+            upwind_weight: T::from_f64(flux.upwind_weight()),
         }
     }
 
     pub fn from_equation(mesh: Arc<CubedSphereMesh<T>>, equation: &ScalarAdvection) -> Self {
         Self::new(mesh, equation.wind_arc())
+    }
+
+    /// Selects the interface numerical flux used by the SAT penalty.
+    pub fn with_flux(mut self, flux: NumericalFlux) -> Self {
+        self.flux = flux;
+        self.upwind_weight = T::from_f64(flux.upwind_weight());
+        self
+    }
+
+    pub fn flux(&self) -> NumericalFlux {
+        self.flux
     }
 }
 
@@ -140,6 +159,7 @@ impl<T: FloatScalar> ComputeBackend<T> for CpuBackend<T> {
         let inv_w0 = T::ONE / mesh.weights_1d[0];
         let inv_wn = T::ONE / mesh.weights_1d[n - 1];
         let radius = mesh.config.radius;
+        let upwind_weight = self.upwind_weight;
 
         rhs.par_chunks_mut(n_elem_nodes)
             .enumerate()
@@ -242,7 +262,7 @@ impl<T: FloatScalar> ComputeBackend<T> for CpuBackend<T> {
                         }
                     }
 
-                    // 2. Conservative Upwind SAT Boundary Penalty (no `sqrt_g` in denominator)
+                    // 2. Conservative alpha-flux SAT Boundary Penalty (no `sqrt_g` in denominator)
                     for side in EdgeSide::ALL {
                         let nbr = mesh.neighbor(elem, side);
                         let nbr_base = (nbr.nbr_elem as usize) * n_elem_nodes;
@@ -265,7 +285,8 @@ impl<T: FloatScalar> ComputeBackend<T> for CpuBackend<T> {
                                 EdgeSide::North => u_b[local_idx],
                             };
 
-                            let switch = T::HALF * (vn - vn.abs()); // <= 0 on inflow, 0 on outflow
+                            // alpha = 1 (upwind): <= 0 on inflow, 0 on outflow; alpha = 0: central
+                            let switch = T::HALF * (vn - upwind_weight * vn.abs());
                             let q_in = phi_elem[local_idx];
                             let q_out = state[nbr_base + nbr_local_idx];
                             rhs_elem[local_idx] += -switch * (q_out - q_in) * inv_w_edge;

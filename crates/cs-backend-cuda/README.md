@@ -12,8 +12,8 @@ Inside **Developer PowerShell for VS 2022 (x64)** after completing [../../docs/W
 cd crates\cs-backend-cuda
 cargo oxide doctor
 cargo oxide setup
-cargo oxide build --release
-cargo oxide run --release --bin gpu_parity
+cargo oxide build
+cargo oxide run --bin gpu_parity
 ```
 
 ## Quick Run (WSL2 Ubuntu 24.04 / Linux)
@@ -22,8 +22,8 @@ cargo oxide run --release --bin gpu_parity
 cd crates/cs-backend-cuda
 cargo oxide doctor
 cargo oxide setup
-cargo oxide build --release
-cargo oxide run --release --bin gpu_parity
+cargo oxide build
+cargo oxide run --bin gpu_parity
 ```
 
 See:

@@ -17,9 +17,49 @@ pub struct ErrorMetrics {
     pub max_initial: f64,
     pub min_final: f64,
     pub max_final: f64,
+    /// Discrete energy `E = \int phi^2 dS` of the initial state.
+    pub energy_initial: f64,
+    /// Discrete energy `E = \int phi^2 dS` of the final state.
+    pub energy_final: f64,
+    /// Signed relative energy change `(E(T) - E(0)) / E(0)` (negative = dissipated).
+    pub energy_rel_change: f64,
 }
 
-/// Evaluates L1/L2/Linf error norms, extrema, and discrete mass conservation.
+/// Discrete energy `E = \int_{S^2} phi^2 dS` using the same `f64` LGL surface quadrature
+/// (`w_i w_j sqrt(g)`) as the SBP mass matrix, so it matches the norm of the energy estimate.
+///
+/// Squares are formed in `f64` so `f32` states do not lose precision in the diagnostic.
+pub fn compute_energy<T: FloatScalar>(mesh: &CubedSphereMesh<T>, field: &[T]) -> f64 {
+    assert_eq!(field.len(), mesh.total_nodes);
+    let n = mesh.n_nodes_1d;
+    let mut total = 0.0;
+    for e in 0..mesh.n_elems {
+        let base = e * mesh.n_nodes_elem;
+        for j in 0..n {
+            let wj = mesh.weights_1d_f64[j];
+            let mut row_sum = 0.0;
+            for i in 0..n {
+                let idx = base + j * n + i;
+                let v = field[idx].to_f64();
+                row_sum += mesh.weights_1d_f64[i] * mesh.sqrt_g_f64[idx] * v * v;
+            }
+            total += wj * row_sum;
+        }
+    }
+    total
+}
+
+/// Signed relative change `(after - before) / before`, falling back to the absolute change
+/// when `before` is (numerically) zero.
+fn signed_rel_change(before: f64, after: f64) -> f64 {
+    if before.abs() > 1e-30 {
+        (after - before) / before.abs()
+    } else {
+        after - before
+    }
+}
+
+/// Evaluates L1/L2/Linf error norms, extrema, discrete mass conservation, and discrete energy.
 pub fn compute_diagnostics<T: FloatScalar>(
     mesh: &CubedSphereMesh<T>,
     initial: &[T],
@@ -109,6 +149,9 @@ pub fn compute_diagnostics<T: FloatScalar>(
         (f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN)
     };
 
+    let energy_initial = compute_energy(mesh, initial);
+    let energy_final = compute_energy(mesh, final_state);
+
     ErrorMetrics {
         l1_rel,
         l2_abs,
@@ -122,6 +165,9 @@ pub fn compute_diagnostics<T: FloatScalar>(
         max_initial,
         min_final,
         max_final,
+        energy_initial,
+        energy_final,
+        energy_rel_change: signed_rel_change(energy_initial, energy_final),
     }
 }
 
@@ -149,9 +195,45 @@ mod tests {
         assert!((m_with_exact.mass_rel_err - 0.02).abs() < 1e-13);
         assert!((m_with_exact.min_final - 1.02).abs() < 1e-13);
 
+        // Energy of phi == 1 is the (quadrature) surface area; scaling by 1.02 scales it by 1.02^2.
+        let area = mesh.surface_area();
+        assert!((m_with_exact.energy_initial - area).abs() / area < 1e-14);
+        assert!((m_with_exact.energy_rel_change - (1.02_f64 * 1.02 - 1.0)).abs() < 1e-13);
+
         let m_no_exact = compute_diagnostics(&mesh, &initial, &perturbed, None);
         assert!(m_no_exact.l2_rel.is_nan());
         assert!(m_no_exact.l_inf.is_nan());
         assert!((m_no_exact.mass_rel_err - 0.02).abs() < 1e-13);
+        assert!(m_no_exact.energy_rel_change > 0.0);
+
+        // Signed: shrinking the field reports a negative (dissipative) change.
+        let shrunk = vec![0.9_f64; mesh.total_nodes];
+        let m_shrunk = compute_diagnostics(&mesh, &initial, &shrunk, None);
+        assert!((m_shrunk.energy_rel_change - (0.81 - 1.0)).abs() < 1e-13);
+    }
+
+    #[test]
+    fn test_energy_matches_l2_norm_squared_and_f32_precision() {
+        let cfg = MeshConfig {
+            radius: 1.0,
+            num_elem_per_face: 3,
+            poly_order: 5,
+            projection: ProjectionKind::Equidistant,
+        };
+        let mesh = CubedSphereMesh::<f64>::from_config(cfg);
+        let field: Vec<f64> = (0..mesh.total_nodes)
+            .map(|idx| mesh.xyz[2][idx] + 0.3 * mesh.xyz[0][idx])
+            .collect();
+        let squared: Vec<f64> = field.iter().map(|v| v * v).collect();
+        let e = compute_energy(&mesh, &field);
+        assert!((e - mesh.integrate(&squared)).abs() < 1e-13 * e);
+        // \int (z + 0.3 x)^2 dS over the unit sphere = (1 + 0.09) * 4 pi / 3
+        let exact = 1.09 * 4.0 * std::f64::consts::PI / 3.0;
+        assert!((e - exact).abs() / exact < 1e-6, "E={e}, exact={exact}");
+
+        let mesh32 = CubedSphereMesh::<f32>::from_config(cfg);
+        let field32: Vec<f32> = field.iter().map(|&v| v as f32).collect();
+        let e32 = compute_energy(&mesh32, &field32);
+        assert!((e32 - e).abs() / e < 1e-6, "f32 energy {e32} vs f64 {e}");
     }
 }

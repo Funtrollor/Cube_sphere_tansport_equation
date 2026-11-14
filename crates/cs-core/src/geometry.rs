@@ -242,6 +242,20 @@ impl Projection for EquiangularProjection {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EquidistantProjection;
 
+impl EquidistantProjection {
+    /// Analytical Jacobian formula for Equidistant Cubed-Sphere:
+    /// `J(alpha, beta) = R^2 * (4/pi)^2 / (1 + (4*alpha/pi)^2 + (4*beta/pi)^2)^(3/2)`.
+    /// The gnomonic area factor `R^2/rho^3` is multiplied by `dx/dalpha * dy/dbeta = (4/pi)^2`.
+    #[inline]
+    pub fn analytical_jacobian(alpha: f64, beta: f64, radius: f64) -> f64 {
+        let scale = 4.0 / std::f64::consts::PI;
+        let x = alpha * scale;
+        let y = beta * scale;
+        let rho = (1.0 + x * x + y * y).sqrt();
+        (radius * radius * scale * scale) / (rho * rho * rho)
+    }
+}
+
 impl Projection for EquidistantProjection {
     fn name(&self) -> &'static str {
         "equidistant"
@@ -385,6 +399,49 @@ mod tests {
                     // Analytical Jacobian matches metric determinant sqrt_g
                     let m = proj.point_metric(face, a, b, radius);
                     let j_ana = EquiangularProjection::analytical_jacobian(a, b, radius);
+                    assert!(
+                        (m.sqrt_g - j_ana).abs() < 1e-13,
+                        "face {:?} ({a},{b}): sqrt_g={} vs j_ana={}",
+                        face,
+                        m.sqrt_g,
+                        j_ana
+                    );
+
+                    // Biorthogonality of contravariant basis: e^i . e_j = delta_{ij}
+                    assert!((dot3(m.contra_alpha, ea) - 1.0).abs() < 1e-13);
+                    assert!(dot3(m.contra_alpha, eb).abs() < 1e-13);
+                    assert!(dot3(m.contra_beta, ea).abs() < 1e-13);
+                    assert!((dot3(m.contra_beta, eb) - 1.0).abs() < 1e-13);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_equidistant_analytical_jacobian_and_biorthogonality() {
+        let proj = EquidistantProjection;
+        let radius = 2.5;
+        let pi4 = std::f64::consts::FRAC_PI_4;
+        let samples = [-pi4, -0.6, -0.2, 0.0, 0.35, 0.71, pi4];
+
+        for face in CubeFace::ALL {
+            for &a in &samples {
+                for &b in &samples {
+                    let (xyz, ea, eb) = proj.point_and_tangents(face, a, b, radius);
+                    let r_norm = dot3(xyz, xyz).sqrt();
+                    assert!((r_norm - radius).abs() < 1e-13);
+
+                    // Orthogonality to radial vector
+                    assert!(dot3(xyz, ea).abs() < 1e-13);
+                    assert!(dot3(xyz, eb).abs() < 1e-13);
+
+                    // Right-handed: (ea x eb) . xyz > 0
+                    let normal = cross3(ea, eb);
+                    assert!(dot3(normal, xyz) > 0.0);
+
+                    // Analytical Jacobian matches metric determinant sqrt_g
+                    let m = proj.point_metric(face, a, b, radius);
+                    let j_ana = EquidistantProjection::analytical_jacobian(a, b, radius);
                     assert!(
                         (m.sqrt_g - j_ana).abs() < 1e-13,
                         "face {:?} ({a},{b}): sqrt_g={} vs j_ana={}",

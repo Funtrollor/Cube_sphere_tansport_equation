@@ -11,11 +11,13 @@ use cs_equations::{
     ScalarField, SolidBodyRotation, TwinGaussianBells, WindKind,
 };
 use cs_io::{
-    compute_diagnostics, format_convergence_table, format_temporal_convergence_table,
-    populate_convergence_orders, populate_temporal_convergence_orders, write_convergence_csv,
-    write_json, write_pvd_series, write_vtu, ConvergenceRow,
+    compute_diagnostics, compute_energy, format_convergence_table,
+    format_temporal_convergence_table, populate_convergence_orders,
+    populate_temporal_convergence_orders, write_convergence_csv, write_json, write_pvd_series,
+    write_vtu, ConvergenceRow, ErrorMetrics,
 };
-use cs_solver::{run_lsrk45_with_dt, ComputeBackend, SimulationConfig};
+use cs_solver::{run_lsrk45_with_dt, ComputeBackend, NumericalFlux, SimulationConfig};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Precision {
@@ -45,6 +47,7 @@ struct CliOptions {
     dt: Option<f64>,
     sigma_ratio: Option<f64>,
     precision: Precision,
+    flux: NumericalFlux,
     vtk_out: Option<String>,
     pvd_dir: Option<String>,
     frames: usize,
@@ -72,6 +75,7 @@ impl Default for CliOptions {
             dt: None,
             sigma_ratio: None,
             precision: Precision::F64,
+            flux: NumericalFlux::Upwind,
             vtk_out: None,
             pvd_dir: None,
             frames: 0,
@@ -113,6 +117,7 @@ COMMON OPTIONS:
     --dt <step>                     Explicit fixed time step dt overriding CFL (for `run`)
     --sigma-ratio <ratio>           Gaussian width ratio sigma/R (optional override)
     --precision <f64|f32>           Floating-point scalar type (default: f64)
+    --flux <kind>                   Interface flux: upwind | central | alpha in [0,1] (default: upwind)
 
 OUTPUT / CONVERGENCE / BENCH OPTIONS:
     --vtk-out <file.vtu>            Write final solution + exact/error fields to VTK .vtu
@@ -259,6 +264,12 @@ fn parse_args(args: &[String]) -> Result<CliOptions, String> {
                 };
                 i += 2;
             }
+            "--flux" => {
+                opts.flux = next_val(i)?
+                    .parse()
+                    .map_err(|e| format!("invalid --flux: {e}"))?;
+                i += 2;
+            }
             "--vtk-out" => {
                 opts.vtk_out = Some(next_val(i)?.to_string());
                 i += 2;
@@ -312,6 +323,25 @@ fn parse_args(args: &[String]) -> Result<CliOptions, String> {
         }
     }
     Ok(opts)
+}
+
+/// Discrete energy `E(t) = \int phi^2 dS` sampled at a recorded snapshot.
+#[derive(Debug, Clone, Copy, Serialize)]
+struct EnergySample {
+    step: usize,
+    time: f64,
+    energy: f64,
+}
+
+/// JSON report of `run`: the diagnostic metrics (flattened at the top level, as before),
+/// the interface flux, and the energy history when `--frames` is used.
+#[derive(Debug, Serialize)]
+struct RunReport {
+    flux: NumericalFlux,
+    #[serde(flatten)]
+    metrics: ErrorMetrics,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    energy_history: Vec<EnergySample>,
 }
 
 fn build_equation(opts: &CliOptions) -> ScalarAdvection {
@@ -380,7 +410,7 @@ fn run_typed<T: FloatScalar>(opts: &CliOptions, label: &str) {
     };
     let mesh = Arc::new(CubedSphereMesh::<T>::from_config(cfg));
     let equation = build_equation(opts);
-    let backend = CpuBackend::from_equation(Arc::clone(&mesh), &equation);
+    let backend = CpuBackend::from_equation(Arc::clone(&mesh), &equation).with_flux(opts.flux);
 
     let sim_cfg = SimulationConfig {
         cfl: opts.cfl,
@@ -393,6 +423,15 @@ fn run_typed<T: FloatScalar>(opts: &CliOptions, label: &str) {
         run_lsrk45_with_dt(&backend, &equation, &sim_cfg, opts.dt).expect("CPU backend failed");
     let exact = equation.evaluate_exact(&mesh, output.t_final);
     let metrics = compute_diagnostics(&mesh, &output.initial, &output.final_state, exact.as_deref());
+    let energy_history: Vec<EnergySample> = output
+        .snapshots
+        .iter()
+        .map(|s| EnergySample {
+            step: s.step,
+            time: s.time,
+            energy: compute_energy(&mesh, &s.phi),
+        })
+        .collect();
 
     let dof_stages = (mesh.total_nodes as f64) * (output.steps as f64) * 5.0;
     let mdofs_per_sec = if output.elapsed_secs > 0.0 {
@@ -407,10 +446,11 @@ fn run_typed<T: FloatScalar>(opts: &CliOptions, label: &str) {
         opts.k, opts.order, mesh.n_elems, mesh.total_nodes, opts.projection
     );
     println!(
-        "Physics           : wind={}, initial={}, periods={}",
+        "Physics           : wind={}, initial={}, periods={}, flux={}",
         equation.wind().name(),
         equation.initial().name(),
-        opts.periods
+        opts.periods,
+        opts.flux
     );
     println!(
         "Time integration  : dt={:.6e}, steps={}, T_final={:.6}",
@@ -425,6 +465,10 @@ fn run_typed<T: FloatScalar>(opts: &CliOptions, label: &str) {
         metrics.mass_initial, metrics.mass_final, metrics.mass_rel_err
     );
     println!(
+        "Energy (int phi^2): E(0)={:.12e}, E(T)={:.12e}, rel_change={:+.3e}",
+        metrics.energy_initial, metrics.energy_final, metrics.energy_rel_change
+    );
+    println!(
         "Extrema           : init=[{:.6}, {:.6}], final=[{:.6}, {:.6}]",
         metrics.min_initial, metrics.max_initial, metrics.min_final, metrics.max_final
     );
@@ -433,6 +477,19 @@ fn run_typed<T: FloatScalar>(opts: &CliOptions, label: &str) {
             "Accuracy errors   : L1_rel={:.4e}, L2_rel={:.4e}, L2_abs={:.4e}, Linf={:.4e}",
             metrics.l1_rel, metrics.l2_rel, metrics.l2_abs, metrics.l_inf
         );
+    }
+
+    if !energy_history.is_empty() {
+        println!("Energy history    : {} snapshots", energy_history.len());
+        for s in &energy_history {
+            println!(
+                "    step {:>8}  t={:.6}  E={:.12e}  E/E(0)-1={:+.3e}",
+                s.step,
+                s.time,
+                s.energy,
+                s.energy / metrics.energy_initial - 1.0
+            );
+        }
     }
 
     if let Some(vtk_path) = &opts.vtk_out {
@@ -472,7 +529,12 @@ fn run_typed<T: FloatScalar>(opts: &CliOptions, label: &str) {
     }
 
     if let Some(json_path) = &opts.json_out {
-        write_json(json_path, &metrics).expect("failed writing JSON");
+        let report = RunReport {
+            flux: opts.flux,
+            metrics,
+            energy_history,
+        };
+        write_json(json_path, &report).expect("failed writing JSON");
         println!("Wrote JSON report : {json_path}");
     }
 }
@@ -487,12 +549,13 @@ fn cmd_converge(opts: &CliOptions) {
     };
 
     println!(
-        "=== Convergence Study ({:?}, wind={}, initial={}, {:?}, alpha0={:.3} rad) ===",
+        "=== Convergence Study ({:?}, wind={}, initial={}, {:?}, alpha0={:.3} rad, flux={}) ===",
         opts.mode,
         equation.wind().name(),
         equation.initial().name(),
         opts.projection,
-        opts.alpha0
+        opts.alpha0,
+        opts.flux
     );
 
     let total_start = Instant::now();
@@ -506,7 +569,8 @@ fn cmd_converge(opts: &CliOptions) {
                 poly_order: opts.order,
                 projection: opts.projection,
             }));
-            let backend = CpuBackend::from_equation(Arc::clone(&mesh), &equation);
+            let backend =
+                CpuBackend::from_equation(Arc::clone(&mesh), &equation).with_flux(opts.flux);
             for &dt in &opts.dts {
                 let out = run_lsrk45_with_dt(&backend, &equation, &sim_cfg, Some(dt))
                     .expect("CPU failed");
@@ -549,7 +613,8 @@ fn cmd_converge(opts: &CliOptions) {
                     poly_order: p,
                     projection: opts.projection,
                 }));
-                let backend = CpuBackend::from_equation(Arc::clone(&mesh), &equation);
+                let backend =
+                    CpuBackend::from_equation(Arc::clone(&mesh), &equation).with_flux(opts.flux);
                 let out = run_lsrk45_with_dt(&backend, &equation, &sim_cfg, opts.dt)
                     .expect("CPU failed");
                 let exact = equation
@@ -600,7 +665,7 @@ fn bench_typed<T: FloatScalar>(opts: &CliOptions, label: &str) {
         projection: opts.projection,
     }));
     let eq = build_equation(opts);
-    let backend = CpuBackend::from_equation(Arc::clone(&mesh), &eq);
+    let backend = CpuBackend::from_equation(Arc::clone(&mesh), &eq).with_flux(opts.flux);
 
     let init = eq.evaluate_initial(&mesh);
     let mut u = backend.upload(&init).unwrap();
