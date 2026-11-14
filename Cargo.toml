@@ -18,7 +18,6 @@ edition = "2021"
 license = "MIT"
 authors = ["LI, CHIN-KAI"]
 repository = "https://github.com/Funtrollor/cubesphere"
-homepage = "https://github.com/Funtrollor/cubesphere"
 readme = "README.md"
 rust-version = "1.87"
 keywords = ["cubed-sphere", "spectral-element", "advection", "pde", "climate"]

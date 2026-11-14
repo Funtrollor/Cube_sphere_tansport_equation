@@ -202,10 +202,10 @@ impl<T: FloatScalar> CubedSphereMesh<T> {
                     let elem = Self::compute_elem_id(k, face, e_alpha, e_beta);
                     let base = elem * n_nodes_elem;
 
-                    for j in 0..n_nodes_1d {
-                        let beta = beta_center + elem_half_width * reference.nodes_f64[j];
-                        for i in 0..n_nodes_1d {
-                            let alpha = alpha_center + elem_half_width * reference.nodes_f64[i];
+                    for (j, &xi_beta) in reference.nodes_f64.iter().enumerate() {
+                        let beta = beta_center + elem_half_width * xi_beta;
+                        for (i, &xi_alpha) in reference.nodes_f64.iter().enumerate() {
+                            let alpha = alpha_center + elem_half_width * xi_alpha;
                             let m = projection.point_metric(face, alpha, beta, config.radius);
                             let idx = base + j * n_nodes_1d + i;
 
