@@ -1,0 +1,25 @@
+[package]
+name = "cubesphere-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories = ["science", "simulation", "command-line-utilities"]
+description = "Command-line runner, convergence driver, and CPU/GPU benchmark harness"
+
+[[bin]]
+name = "cubesphere"
+path = "src/main.rs"
+
+[dependencies]
+cubesphere-core = { workspace = true }
+cubesphere-equations = { workspace = true }
+cubesphere-solver = { workspace = true }
+cubesphere-backend-cpu = { workspace = true }
+cubesphere-io = { workspace = true }
+serde = { workspace = true }

@@ -1,6 +1,6 @@
 # 原生 Windows 11 + RTX 5070 Ti (`cuda-oxide`) GPU 工具鏈設定與驗證指南
 
-本指南說明如何在 **原生 Windows 11 (`x86_64-pc-windows-msvc`) + NVIDIA GeForce RTX 5070 Ti (`sm_120`, Consumer Blackwell)** 環境中，安裝 [`NVIDIA/cuda-rust`](https://github.com/NVIDIA/cuda-rust)（`cuda-oxide`）工具鏈，並直接於 Developer PowerShell 編譯與驗證本專案的純 Rust GPU 後端 [`crates/cs-backend-cuda`](../crates/cs-backend-cuda/src/lib.rs)。
+本指南說明如何在 **原生 Windows 11 (`x86_64-pc-windows-msvc`) + NVIDIA GeForce RTX 5070 Ti (`sm_120`, Consumer Blackwell)** 環境中，安裝 [`NVIDIA/cuda-rust`](https://github.com/NVIDIA/cuda-rust)（`cuda-oxide`）工具鏈，並直接於 Developer PowerShell 編譯與驗證本專案的純 Rust GPU 後端 [`crates/cubesphere-backend-cuda`](../crates/cubesphere-backend-cuda/src/lib.rs)。
 
 > **原生 Windows vs WSL2 選擇建議**：
 > - 上游 `NVIDIA/cuda-rust` 已正式支援原生 `x86_64-pc-windows-msvc`（見官方 [`windows.md`](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-oxide/cuda-oxide-book/getting-started/windows.md) 與 MSVC 修補如 [#1473](https://github.com/NVIDIA/cuda-rust/commit/d9430b0)），無需安裝 WSL2 即可直接編譯、執行與除錯（含 WDDM Compute Sanitizer）。
@@ -39,7 +39,7 @@
 
 5. **Rust 工具鏈（CPU 穩定版 + GPU 鎖定版本 `1.99.1`）**
    - 根 Workspace（純 CPU Crates）使用標準穩定版 Rust (`stable-x86_64-pc-windows-msvc`)。
-   - GPU Crate [`crates/cs-backend-cuda/rust-toolchain.toml`](../crates/cs-backend-cuda/rust-toolchain.toml) 已自動鎖定 `cuda-oxide` 相容通道 `1.99.1`（並於 [`.cargo/config.toml`](../crates/cs-backend-cuda/.cargo/config.toml) 自動帶入 `RUSTC_BOOTSTRAP = "1"`），請先安裝該通道與必備元件：
+   - GPU Crate [`crates/cubesphere-backend-cuda/rust-toolchain.toml`](../crates/cubesphere-backend-cuda/rust-toolchain.toml) 已自動鎖定 `cuda-oxide` 相容通道 `1.99.1`（並於 [`.cargo/config.toml`](../crates/cubesphere-backend-cuda/.cargo/config.toml) 自動帶入 `RUSTC_BOOTSTRAP = "1"`），請先安裝該通道與必備元件：
      ```powershell
      rustup toolchain install stable
      rustup toolchain install 1.99.1
@@ -90,9 +90,9 @@ cargo install --locked --path crates/cargo-oxide
 ### 3.1 同步倉庫並驗證純 CPU Workspace（6 個 Crates）
 
 ```powershell
-git clone https://github.com/Funtrollor/Cube_sphere_tansport_equation.git
+git clone https://github.com/Funtrollor/cubesphere.git
 # 若本機已有倉庫：git checkout main; git pull origin main
-cd Cube_sphere_tansport_equation
+cd cubesphere
 
 # 1. 靜態檢查（零警告）
 cargo clippy --workspace --all-targets -- -D warnings
@@ -101,8 +101,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --release --workspace
 
 # 3. 編譯 CLI 並試跑基準算例
-cargo build --release -p cs-cli
-.\target\release\cs-cli.exe info --k 8 --order 4
+cargo build --release -p cubesphere-cli
+.\target\release\cubesphere.exe info --k 8 --order 4
 ```
 
 ### 3.2 環境體檢與執行 GPU vs CPU 對拍（`gpu_parity`）
@@ -110,7 +110,7 @@ cargo build --release -p cs-cli
 在同一個 **Developer PowerShell for VS 2022** 中進入獨立隔離的 GPU Crate 目錄：
 
 ```powershell
-cd crates\cs-backend-cuda
+cd crates\cubesphere-backend-cuda
 
 # 1. 檢查 CUDA Toolkit、libclang、lld-link、vcpkg libffi 與 Rust 1.99.1 是否全數就緒
 cargo oxide doctor
@@ -123,7 +123,7 @@ cargo oxide build
 cargo oxide run --bin gpu_parity
 ```
 
-`gpu_parity` 會透過完全相同的 [`ComputeBackend<T>`](../crates/cs-solver/src/backend.rs) 與 [`run_lsrk45_simulation`](../crates/cs-solver/src/lsrk45.rs#L112) 介面執行以下 5 項自動驗收：
+`gpu_parity` 會透過完全相同的 [`ComputeBackend<T>`](../crates/cubesphere-solver/src/backend.rs) 與 [`run_lsrk45_simulation`](../crates/cubesphere-solver/src/lsrk45.rs#L112) 介面執行以下 5 項自動驗收：
 
 1. **Solid-Body Rotation (`f64`, `K=4, p=4`, 1 圈)**：驗證 GPU 與 CPU Rayon 逐點誤差 $\max |\phi_{\text{GPU}} - \phi_{\text{CPU}}| < 10^{-13}$、質量相對誤差 $< 10^{-14}$。
 2. **Nair & Lauritzen (2010) Case 4 變形流 (`f64`, `K=4, p=5`, 1 週期)**：驗證無超越函數加倍角 GPU 風場核心與 CPU 誤差 $< 10^{-12}$、質量誤差 $< 10^{-14}$。
@@ -140,7 +140,7 @@ cargo oxide run --bin gpu_parity
 ### 4.1 檢視生成的 PTX 與暫存器使用率
 
 ```powershell
-cd crates\cs-backend-cuda
+cd crates\cubesphere-backend-cuda
 cargo oxide inspect --release --bin gpu_parity
 ```
 
@@ -162,14 +162,14 @@ Remove-Item "$env:TEMP\test_sm120.cubin" -ErrorAction SilentlyContinue
 啟用後即可於一般 Developer PowerShell 檢查越界或競態條件：
 
 ```powershell
-cd crates\cs-backend-cuda
+cd crates\cubesphere-backend-cuda
 cargo oxide sanitize --bin gpu_parity
 ```
 
 ### 4.3 RTX 5070 Ti (`sm_120`) 架構特性與設計重點
 
 - **1-thread-per-DOF 融合核心（零原子競爭）**：`split_form_and_sat_{f64,f32}` 將分裂散度與 4 邊 SAT 懲罰融合成單一 Kernel，每位執行緒只寫入自身的 `rhs[tid]`，透過 `DisjointSlice<T>` 與只讀鄰接表讀取跨面板節點，無需 `atomicAdd` 亦不受高階 $p$ 的 Shared Memory 容量限制。
-- **FP32 vs FP64 特性**：Consumer Blackwell (`sm_120`) 的 FP32 ALU 與記憶體頻寬優勢極大，而 FP64 比例約為 `1 : 64`。系統預設以 `f64` 保證嚴格譜精度與機器精度質量守恆，同時透過 [`CudaScalar`](../crates/cs-backend-cuda/src/lib.rs#L564) 提供一鍵切換 `f32` 高吞吐測試。
+- **FP32 vs FP64 特性**：Consumer Blackwell (`sm_120`) 的 FP32 ALU 與記憶體頻寬優勢極大，而 FP64 比例約為 `1 : 64`。系統預設以 `f64` 保證嚴格譜精度與機器精度質量守恆，同時透過 [`CudaScalar`](../crates/cubesphere-backend-cuda/src/lib.rs#L564) 提供一鍵切換 `f32` 高吞吐測試。
 - **Phase 3 PyO3 擴充提醒**：本專案目前已驗證之可執行檔（`gpu_parity.exe`）透過 EXE 內嵌 `.oxart` 載入 PTX，在 Windows 可直接運作。未來若在 Phase 3 新增 Python C 擴充模組（`.pyd` / `cdylib`），因 `cuda-host` 的 `load_embedded_module_from_anchor` 目前僅支援 Linux/Android `procfs`，在原生 Windows 建置 `.pyd` 時需改用顯式 PTX/cubin 路徑或將 `.oxart` 獨立載入，而 Linux / WSL2 `.so` 則已直接支援 anchor 自動載入。
 
 ---

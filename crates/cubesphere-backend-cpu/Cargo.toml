@@ -1,0 +1,22 @@
+[package]
+name = "cubesphere-backend-cpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Parallel Rayon CPU compute backend for Cubed-Sphere Spectral Element Transport"
+
+[dependencies]
+cubesphere-core = { workspace = true }
+cubesphere-equations = { workspace = true }
+cubesphere-solver = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+cubesphere-io = { workspace = true }
