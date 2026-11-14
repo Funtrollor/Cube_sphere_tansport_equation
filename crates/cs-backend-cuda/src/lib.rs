@@ -14,7 +14,7 @@ use cuda_host::{EmbeddedModuleError, cuda_module};
 
 use cs_core::{CubedSphereMesh, EdgeNeighbor, FloatScalar, dot3};
 use cs_equations::{ScalarAdvection, WindDescriptor, WindField};
-use cs_solver::ComputeBackend;
+use cs_solver::{ComputeBackend, NumericalFlux};
 
 const BLOCK_THREADS: u32 = 256;
 
@@ -115,6 +115,7 @@ mod kernels {
     fn sat_edge_flux_f64(
         q_in: f64,
         vn: f64,
+        upwind_weight: f64,
         inv_w_edge: f64,
         m: usize,
         n_1d: usize,
@@ -122,8 +123,10 @@ mod kernels {
         packed_nbr: u64,
         state: &[f64],
     ) -> f64 {
-        // Equivalent to `switch = 0.5 * (vn - |vn|)` without requiring std `abs()`.
-        let switch = if vn < 0.0 { vn } else { 0.0 };
+        // alpha-flux `switch = 0.5 * (vn - alpha * |vn|)` without requiring std `abs()`
+        // (alpha = 1: upwind, exactly `vn` on inflow and 0 on outflow; alpha = 0: central).
+        let abs_vn = if vn < 0.0 { -vn } else { vn };
+        let switch = 0.5_f64 * (vn - upwind_weight * abs_vn);
         if switch == 0.0 {
             return 0.0;
         }
@@ -138,6 +141,7 @@ mod kernels {
     fn sat_edge_flux_f32(
         q_in: f32,
         vn: f32,
+        upwind_weight: f32,
         inv_w_edge: f32,
         m: usize,
         n_1d: usize,
@@ -145,7 +149,8 @@ mod kernels {
         packed_nbr: u64,
         state: &[f32],
     ) -> f32 {
-        let switch = if vn < 0.0 { vn } else { 0.0 };
+        let abs_vn = if vn < 0.0 { -vn } else { vn };
+        let switch = 0.5_f32 * (vn - upwind_weight * abs_vn);
         if switch == 0.0 {
             return 0.0;
         }
@@ -156,7 +161,7 @@ mod kernels {
         -switch * (q_out - q_in) * inv_w_edge
     }
 
-    /// Fused Split-Form Volume Divergence + Upwind SAT Boundary Penalty (`f64`).
+    /// Fused Split-Form Volume Divergence + alpha-flux SAT Boundary Penalty (`f64`).
     ///
     /// Uses 1 thread per DOF (`tid in 0..total_nodes`), eliminating corner synchronization hazards
     /// and atomic contention across shared element boundaries and corners.
@@ -175,6 +180,7 @@ mod kernels {
         map_factor: f64,
         inv_w0: f64,
         inv_wn: f64,
+        upwind_weight: f64,
     ) {
         let idx = thread::index_1d();
         let tid = idx.get();
@@ -235,6 +241,7 @@ mod kernels {
                 total_rhs += sat_edge_flux_f64(
                     phi_k,
                     -ua_k,
+                    upwind_weight,
                     inv_w0,
                     j,
                     n_1d,
@@ -247,6 +254,7 @@ mod kernels {
                 total_rhs += sat_edge_flux_f64(
                     phi_k,
                     ua_k,
+                    upwind_weight,
                     inv_wn,
                     j,
                     n_1d,
@@ -259,6 +267,7 @@ mod kernels {
                 total_rhs += sat_edge_flux_f64(
                     phi_k,
                     -ub_k,
+                    upwind_weight,
                     inv_w0,
                     i,
                     n_1d,
@@ -271,6 +280,7 @@ mod kernels {
                 total_rhs += sat_edge_flux_f64(
                     phi_k,
                     ub_k,
+                    upwind_weight,
                     inv_wn,
                     i,
                     n_1d,
@@ -284,7 +294,7 @@ mod kernels {
         }
     }
 
-    /// Fused Split-Form Volume Divergence + Upwind SAT Boundary Penalty (`f32`).
+    /// Fused Split-Form Volume Divergence + alpha-flux SAT Boundary Penalty (`f32`).
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
@@ -300,6 +310,7 @@ mod kernels {
         map_factor: f32,
         inv_w0: f32,
         inv_wn: f32,
+        upwind_weight: f32,
     ) {
         let idx = thread::index_1d();
         let tid = idx.get();
@@ -360,6 +371,7 @@ mod kernels {
                 total_rhs += sat_edge_flux_f32(
                     phi_k,
                     -ua_k,
+                    upwind_weight,
                     inv_w0,
                     j,
                     n_1d,
@@ -372,6 +384,7 @@ mod kernels {
                 total_rhs += sat_edge_flux_f32(
                     phi_k,
                     ua_k,
+                    upwind_weight,
                     inv_wn,
                     j,
                     n_1d,
@@ -384,6 +397,7 @@ mod kernels {
                 total_rhs += sat_edge_flux_f32(
                     phi_k,
                     -ub_k,
+                    upwind_weight,
                     inv_w0,
                     i,
                     n_1d,
@@ -396,6 +410,7 @@ mod kernels {
                 total_rhs += sat_edge_flux_f32(
                     phi_k,
                     ub_k,
+                    upwind_weight,
                     inv_wn,
                     i,
                     n_1d,
@@ -531,6 +546,7 @@ type RhsDispatchFn<T> = Box<
             T,
             T,
             T,
+            T,
         ) -> Result<(), CudaError>
         + Send
         + Sync,
@@ -578,11 +594,11 @@ impl CudaScalar for f64 {
         let mod_rhs = module.clone();
         let prep_rhs = mod_rhs.prepare_split_form_and_sat_f64(cfg)?;
         let rhs_fn: RhsDispatchFn<f64> = Box::new(
-            move |stream, state, u_a, u_b, sqrt_g, diff_mat, nbrs, rhs, n1d, mf, iw0, iwn| {
+            move |stream, state, u_a, u_b, sqrt_g, diff_mat, nbrs, rhs, n1d, mf, iw0, iwn, uw| {
                 mod_rhs
                     .split_form_and_sat_f64(
                         stream, &prep_rhs, state, u_a, u_b, sqrt_g, diff_mat, nbrs, rhs, n1d, mf,
-                        iw0, iwn,
+                        iw0, iwn, uw,
                     )
                     .map_err(CudaError::from)
             },
@@ -624,11 +640,11 @@ impl CudaScalar for f32 {
         let mod_rhs = module.clone();
         let prep_rhs = mod_rhs.prepare_split_form_and_sat_f32(cfg)?;
         let rhs_fn: RhsDispatchFn<f32> = Box::new(
-            move |stream, state, u_a, u_b, sqrt_g, diff_mat, nbrs, rhs, n1d, mf, iw0, iwn| {
+            move |stream, state, u_a, u_b, sqrt_g, diff_mat, nbrs, rhs, n1d, mf, iw0, iwn, uw| {
                 mod_rhs
                     .split_form_and_sat_f32(
                         stream, &prep_rhs, state, u_a, u_b, sqrt_g, diff_mat, nbrs, rhs, n1d, mf,
-                        iw0, iwn,
+                        iw0, iwn, uw,
                     )
                     .map_err(CudaError::from)
             },
@@ -711,6 +727,8 @@ pub struct CudaBackend<T: CudaScalar> {
     lsrk_dispatch: LsrkDispatchFn<T>,
     inv_w0: T,
     inv_wn: T,
+    flux: NumericalFlux,
+    upwind_weight: T,
 }
 
 impl<T: CudaScalar> CudaBackend<T> {
@@ -761,7 +779,20 @@ impl<T: CudaScalar> CudaBackend<T> {
             lsrk_dispatch,
             inv_w0,
             inv_wn,
+            flux: NumericalFlux::default(),
+            upwind_weight: T::from_f64(NumericalFlux::default().upwind_weight()),
         })
+    }
+
+    /// Selects the interface numerical flux used by the SAT penalty (default: upwind).
+    pub fn with_flux(mut self, flux: NumericalFlux) -> Self {
+        self.flux = flux;
+        self.upwind_weight = T::from_f64(flux.upwind_weight());
+        self
+    }
+
+    pub fn flux(&self) -> NumericalFlux {
+        self.flux
     }
 
     pub fn from_equation(
@@ -959,6 +990,7 @@ impl<T: CudaScalar> ComputeBackend<T> for CudaBackend<T> {
                 self.mesh.map_factor,
                 self.inv_w0,
                 self.inv_wn,
+                self.upwind_weight,
             ),
             DeviceWindState::NairLauritzenDevice {
                 period,
@@ -1028,6 +1060,7 @@ impl<T: CudaScalar> ComputeBackend<T> for CudaBackend<T> {
                     self.mesh.map_factor,
                     self.inv_w0,
                     self.inv_wn,
+                    self.upwind_weight,
                 )
             }
             DeviceWindState::HostEvaluatedDynamic { wind, dyn_buf } => {
@@ -1074,6 +1107,7 @@ impl<T: CudaScalar> ComputeBackend<T> for CudaBackend<T> {
                     self.mesh.map_factor,
                     self.inv_w0,
                     self.inv_wn,
+                    self.upwind_weight,
                 )
             }
         }

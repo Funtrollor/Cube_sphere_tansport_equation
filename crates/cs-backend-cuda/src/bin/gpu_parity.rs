@@ -4,25 +4,27 @@ use std::time::Instant;
 
 use cs_backend_cpu::CpuBackend;
 use cs_backend_cuda::{CudaBackend, CudaScalar};
-use cs_core::{CubedSphereMesh, FloatScalar, MeshConfig, ProjectionKind};
+use cs_core::{CubedSphereMesh, MeshConfig, ProjectionKind};
 use cs_equations::{
     GaussianBell, NairLauritzenFlow, ScalarAdvection, SolidBodyRotation, TwinGaussianBells,
 };
 use cs_io::compute_diagnostics;
-use cs_solver::{ComputeBackend, SimulationConfig, run_lsrk45_simulation};
+use cs_solver::{ComputeBackend, NumericalFlux, SimulationConfig, run_lsrk45_simulation};
 
 fn verify_full_simulation_parity<T: CudaScalar>(
     label: &str,
     cfg: MeshConfig,
     equation: &ScalarAdvection,
     sim_cfg: &SimulationConfig,
+    flux: NumericalFlux,
     max_parity_tol: f64,
     max_mass_tol: f64,
 ) {
     let mesh = Arc::new(CubedSphereMesh::<T>::from_config(cfg));
-    let cpu = CpuBackend::from_equation(Arc::clone(&mesh), equation);
+    let cpu = CpuBackend::from_equation(Arc::clone(&mesh), equation).with_flux(flux);
     let gpu = CudaBackend::from_equation(0, Arc::clone(&mesh), equation)
-        .expect("failed initializing CudaBackend");
+        .expect("failed initializing CudaBackend")
+        .with_flux(flux);
 
     let cpu_out = run_lsrk45_simulation(&cpu, equation, sim_cfg).expect("CPU run failed");
     let gpu_out = run_lsrk45_simulation(&gpu, equation, sim_cfg).expect("GPU run failed");
@@ -43,7 +45,7 @@ fn verify_full_simulation_parity<T: CudaScalar>(
     let speedup = cpu_out.elapsed_secs / gpu_out.elapsed_secs.max(1e-9);
 
     println!(
-        "[{label}] K={}, p={}, DOFs={}, steps={} | max|GPU-CPU|={max_diff:.3e} | mass_err={:.3e} | CPU={:.4}s ({cpu_mdofs:.2} MDOF-stages/s) | GPU={:.4}s ({gpu_mdofs:.2} MDOF-stages/s) | {speedup:.2}x",
+        "[{label}] flux={flux}, K={}, p={}, DOFs={}, steps={} | max|GPU-CPU|={max_diff:.3e} | mass_err={:.3e} | CPU={:.4}s ({cpu_mdofs:.2} MDOF-stages/s) | GPU={:.4}s ({gpu_mdofs:.2} MDOF-stages/s) | {speedup:.2}x",
         cfg.num_elem_per_face,
         cfg.poly_order,
         mesh.total_nodes,
@@ -142,6 +144,7 @@ fn main() {
             t_final: None,
             save_frames: 0,
         },
+        NumericalFlux::Upwind,
         1e-13,
         1e-14,
     );
@@ -165,6 +168,47 @@ fn main() {
             t_final: None,
             save_frames: 0,
         },
+        NumericalFlux::Upwind,
+        1e-12,
+        1e-14,
+    );
+
+    verify_full_simulation_parity::<f64>(
+        "SolidBody f64 central",
+        MeshConfig {
+            radius: 1.0,
+            num_elem_per_face: 4,
+            poly_order: 4,
+            projection: ProjectionKind::Equiangular,
+        },
+        &solid_eq,
+        &SimulationConfig {
+            cfl: 0.5,
+            periods: 1.0,
+            t_final: None,
+            save_frames: 0,
+        },
+        NumericalFlux::Central,
+        1e-13,
+        1e-14,
+    );
+
+    verify_full_simulation_parity::<f64>(
+        "NairLauritzen f64 blended",
+        MeshConfig {
+            radius: 1.0,
+            num_elem_per_face: 4,
+            poly_order: 5,
+            projection: ProjectionKind::Equiangular,
+        },
+        &deform_eq,
+        &SimulationConfig {
+            cfl: 0.5,
+            periods: 1.0,
+            t_final: None,
+            save_frames: 0,
+        },
+        NumericalFlux::Blended(0.5),
         1e-12,
         1e-14,
     );
@@ -184,6 +228,7 @@ fn main() {
             t_final: None,
             save_frames: 0,
         },
+        NumericalFlux::Upwind,
         2e-5,
         1e-5,
     );

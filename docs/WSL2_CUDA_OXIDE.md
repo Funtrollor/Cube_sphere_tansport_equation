@@ -127,8 +127,8 @@ cargo test --release --workspace
 
 ```bash
 cd crates/cs-backend-cuda
-cargo oxide build --release
-cargo oxide run --release --bin gpu_parity
+cargo oxide build
+cargo oxide run --bin gpu_parity
 ```
 
 `gpu_parity` 會透過完全相同的 [`ComputeBackend<T>`](../crates/cs-solver/src/backend.rs) 與 `run_lsrk45_simulation` 介面，自動執行以下四項驗收：

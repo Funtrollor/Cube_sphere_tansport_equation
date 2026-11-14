@@ -119,16 +119,19 @@ cargo oxide doctor
 cargo oxide setup
 
 # 3. 編譯 release GPU 後端與執行對拍基準
-cargo oxide build --release
-cargo oxide run --release --bin gpu_parity
+cargo oxide build
+cargo oxide run --bin gpu_parity
 ```
 
-`gpu_parity` 會透過完全相同的 [`ComputeBackend<T>`](../crates/cs-solver/src/backend.rs) 與 [`run_lsrk45_simulation`](../crates/cs-solver/src/lsrk45.rs#L112) 介面執行以下 4 項自動驗收：
+`gpu_parity` 會透過完全相同的 [`ComputeBackend<T>`](../crates/cs-solver/src/backend.rs) 與 [`run_lsrk45_simulation`](../crates/cs-solver/src/lsrk45.rs#L112) 介面執行以下 5 項自動驗收：
 
 1. **Solid-Body Rotation (`f64`, `K=4, p=4`, 1 圈)**：驗證 GPU 與 CPU Rayon 逐點誤差 $\max |\phi_{\text{GPU}} - \phi_{\text{CPU}}| < 10^{-13}$、質量相對誤差 $< 10^{-14}$。
 2. **Nair & Lauritzen (2010) Case 4 變形流 (`f64`, `K=4, p=5`, 1 週期)**：驗證無超越函數加倍角 GPU 風場核心與 CPU 誤差 $< 10^{-12}$、質量誤差 $< 10^{-14}$。
-3. **單精度對拍 (`f32`, `K=8, p=4`)**：驗證 `CudaBackend<f32>` 與 `CpuBackend<f32>` 誤差 $< 2 \times 10^{-5}$。
-4. **高解析度吞吐量基準（`f64` 與 `f32`，`K=16/32, p=4`）**：實測 RTX 5070 Ti 的 `MDOF-stages/s` 與相對於 CPU Rayon 的實際加速比。
+3. **數值通量對拍 (`f64`)**：以 `central` 通量重跑第 1 項、以 `alpha=0.5` 混合通量重跑第 2 項，門檻相同，驗證 GPU 核心的 α-flux SAT 與 CPU 一致。
+4. **單精度對拍 (`f32`, `K=8, p=4`)**：驗證 `CudaBackend<f32>` 與 `CpuBackend<f32>` 誤差 $< 2 \times 10^{-5}$。
+5. **高解析度吞吐量基準（`f64` 與 `f32`，`K=16/32, p=4`）**：實測 RTX 5070 Ti 的 `MDOF-stages/s` 與相對於 CPU Rayon 的實際加速比。
+
+> `cargo-oxide 0.4.0` 的 `build` / `run` 已不接受 `--release`，預設即為 release profile，並會自動偵測 GPU 架構（RTX 5070 Ti 為 `sm_120a`）。
 
 ---
 
